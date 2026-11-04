@@ -2,7 +2,7 @@
 
 基于官方 [rustdesk/rustdesk-server](https://github.com/rustdesk/rustdesk-server) **1.1.16**，移植与 lejianwen API 对接的 **JWT / MUST_LOGIN**，并打包为飞牛 fnOS **原生二进制 `.fpk`**（x86_64）。
 
-当前发行包版本：**1.1.16-3**
+当前发行包版本：**1.1.16-9**
 
 - 仓库：https://github.com/n66g4/rustdesk-server
 - Release：https://github.com/n66g4/rustdesk-server/releases
@@ -19,7 +19,7 @@
 
 1. 在飞牛应用中心导入 `rustdesk-server.fpk`
 2. 按安装向导填写域名/IP、端口、Key（可留空）等
-3. 启动后打开桌面图标进入管理后台：`http://<NAS>:<API端口>/_admin/`
+3. 点击桌面图标 → **先进入配置面板**（域名/端口/Key）→ 点「管理后台」打开 `http://<NAS>:<API端口>/_admin/`
 
 ### 管理后台默认账密
 
@@ -27,9 +27,9 @@
 - 密码：首次启动**随机生成**，写入套件日志（查找 `Admin Password Is:`）
 - 重置：在应用目录执行 `./bin/rustdesk-api reset-admin-pwd <新密码>`
 
-## 应用设置（配置面板）
+## 配置面板（桌面图标）
 
-安装向导与「应用设置」可配置：
+对齐群晖 SPK：桌面入口为 CGI iframe（`/cgi/ThirdParty/rustdesk-server/index.cgi/`），可配置：
 
 | 项 | 说明 |
 | --- | --- |
@@ -37,11 +37,12 @@
 | API 协议 / 端口 | `http` 或 `https`，默认端口 `21114` |
 | ID 端口 (hbbs) | 默认 `21116`（另需开放端口-1 NAT、端口+2 WebSocket） |
 | 中继端口 (hbbr) | 默认 `21117`（另需开放端口+2 WebSocket） |
-| Key（公钥） | 留空则自动生成；也可粘贴已有公钥 |
+| Key（公钥） | 留空则使用已生成公钥；也可粘贴已有公钥 |
 | MUST_LOGIN | 强制客户端先登录 API |
 
-保存后写入 `TRIM_PKGETC/wizard.conf`，同步到 `config.yaml`，并重启服务。
+保存后写入 `etc/wizard.conf` 并同步 `config.yaml`。重载对齐群晖：包内监督进程托管 hbbs/hbbr/api；面板 `kill` API（或仅写配置）触发整组重拉。
 
+升级后请先在应用中心 **停止 → 启动** 一次以加载新监督进程。
 ## 强制登录（可选）
 
 1. API 与 `hbbs` 共用 JWT：`config.yaml` 的 `jwt.key` → 环境变量 `RUSTDESK_API_JWT_KEY`
@@ -79,6 +80,7 @@ fpk/                 # fnOS 包源
   wizard/            # install / config / uninstall 向导
   cmd/               # 生命周期脚本（main、*_callback、_common）
   app/conf/          # 默认 config.yaml
+  app/ui/            # 桌面入口：index.cgi + api.cgi + www 配置面板
 scripts/assemble-fpk.sh
 src/jwt.rs           # JWT 校验
 ```

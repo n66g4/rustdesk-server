@@ -2,12 +2,10 @@
   ".url": {
     "rustdesk-server.Application": {
       "title": "RustDesk Server",
-      "desc": "RustDesk API 管理后台",
+      "desc": "配置域名/端口，并进入管理后台",
       "icon": "images/icon_{0}.png",
-      "type": "url",
-      "protocol": "http",
-      "port": "${wizard_api_port}",
-      "url": "/_admin/",
+      "type": "iframe",
+      "url": "/cgi/ThirdParty/rustdesk-server/index.cgi/",
       "allUsers": true
     }
   }

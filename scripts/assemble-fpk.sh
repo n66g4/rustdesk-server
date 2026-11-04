@@ -43,6 +43,7 @@ if [ ! -f "${FPK}/app/conf/admin/hello.html" ] && [ -f "${API_ROOT}/conf/admin/h
 fi
 
 chmod 755 "${FPK}/cmd/"*
+chmod 755 "${FPK}/app/ui/"*.cgi 2>/dev/null || true
 
 FNPACK="${FNPACK:-fnpack}"
 if ! command -v "${FNPACK}" >/dev/null 2>&1; then
