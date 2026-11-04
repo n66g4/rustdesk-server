@@ -199,9 +199,9 @@ start_all() {
 	local hbbs_port="${wizard_hbbs_port:-21116}"
 	local hbbr_port="${wizard_hbbr_port:-21117}"
 	local relay_host="${wizard_host:-}"
-	[ -z "${relay_host}" ] || [ "${relay_host}" = "127.0.0.1" ] && relay_host=""
-	local relay_arg=()
-	[ -n "${relay_host}" ] && relay_arg=(-r "${relay_host}:${hbbr_port}")
+	if [ -z "${relay_host}" ] || [ "${relay_host}" = "127.0.0.1" ]; then
+		relay_host=""
+	fi
 
 	if [ -z "${RUSTDESK_API_JWT_KEY:-}" ]; then
 		log_msg "WARN: RUSTDESK_API_JWT_KEY empty; MUST_LOGIN=Y will reject connections"
@@ -209,6 +209,12 @@ start_all() {
 
 	# "_" lets hbbs/hbbr use the local id_ed25519 keypair in cwd.
 	local key_arg="_"
+	local hbbs_cmd
+	if [ -n "${relay_host}" ]; then
+		hbbs_cmd="${APP_DIR}/bin/hbbs -r ${relay_host}:${hbbr_port} -p ${hbbs_port} -k ${key_arg} --must-login=${MUST_LOGIN}"
+	else
+		hbbs_cmd="${APP_DIR}/bin/hbbs -p ${hbbs_port} -k ${key_arg} --must-login=${MUST_LOGIN}"
+	fi
 
 	log_msg "Starting hbbs/hbbr/api (MUST_LOGIN=${MUST_LOGIN} ports=${hbbs_port}/${hbbr_port})..."
 	export RUSTDESK_API_JWT_KEY
@@ -217,8 +223,8 @@ start_all() {
 	local pid
 	(
 		cd "${DATA_KEYS}"
-		nohup "${APP_DIR}/bin/hbbs" "${relay_arg[@]}" -p "${hbbs_port}" -k "${key_arg}" --must-login="${MUST_LOGIN}" \
-			>> "${LOG_FILE}" 2>&1 &
+		# shellcheck disable=SC2086
+		nohup ${hbbs_cmd} >> "${LOG_FILE}" 2>&1 &
 		echo $!
 	) > "${PID_FILE}.hbbs"
 	pid=$(tr -d '[:space:]' < "${PID_FILE}.hbbs")
