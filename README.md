@@ -10,10 +10,21 @@
 | `rustdesk-api` | [lejianwen/rustdesk-api](https://github.com/lejianwen/rustdesk-api) Linux amd64 发行包 |
 | `fpk/` | fnOS 应用包源（`fnpack build`） |
 
+## 应用设置（配置面板）
+
+安装时与「应用设置」提供向导，可配置：
+
+- 域名 / IP、API 协议与端口
+- ID（hbbs）/ 中继（hbbr）端口
+- Key（公钥，可留空自动生成）
+- 强制登录 `MUST_LOGIN`
+
+值写入 `TRIM_PKGETC/wizard.conf` 并同步到 `config.yaml`，保存后重启服务。
+
 ## 强制登录（可选）
 
 1. API 与 `hbbs` 共用 JWT 密钥：`config.yaml` 的 `jwt.key`，启动时导出为 `RUSTDESK_API_JWT_KEY`
-2. 设置环境变量 `MUST_LOGIN=Y`（或 `hbbs --must-login=Y`）后，打洞前必须携带有效登录 token
+2. 在应用设置中将「强制登录」设为开启，或环境变量 `MUST_LOGIN=Y`
 
 默认 `MUST_LOGIN=N`，便于首次安装。
 

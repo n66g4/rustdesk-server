@@ -1,2 +1,10 @@
 #!/bin/bash
+set -uo pipefail
+DATA_DIR="${TRIM_PKGVAR:-}"
+CONF_DIR="${TRIM_PKGETC:-}"
+# wizard_delete_data comes from wizard/uninstall (true/false string).
+if [ "${wizard_delete_data:-false}" = "true" ] || [ "${wizard_delete_data:-}" = "1" ]; then
+	rm -rf "${DATA_DIR:?}/"* 2>/dev/null || true
+	rm -rf "${CONF_DIR:?}/"* 2>/dev/null || true
+fi
 exit 0

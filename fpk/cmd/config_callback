@@ -1,5 +1,13 @@
 #!/bin/bash
+set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=/dev/null
+. "${SCRIPT_DIR}/_common"
+
+seed_package_config
+save_wizard_conf
+apply_wizard_to_yaml
+
 bash "${SCRIPT_DIR}/main" stop || true
 bash "${SCRIPT_DIR}/main" start || true
 exit 0

@@ -1,0 +1,115 @@
+#!/bin/bash
+# Shared helpers for install/config callbacks and main.
+# shellcheck disable=SC2034
+
+APP_DIR="${TRIM_APPDEST:-}"
+DATA_DIR="${TRIM_PKGVAR:-}"
+CONF_DIR="${TRIM_PKGETC:-${APP_DIR}/conf}"
+WIZARD_FILE="${CONF_DIR}/wizard.conf"
+
+load_wizard_defaults() {
+	wizard_host="${wizard_host:-}"
+	wizard_api_scheme="${wizard_api_scheme:-http}"
+	wizard_api_port="${wizard_api_port:-21114}"
+	wizard_hbbs_port="${wizard_hbbs_port:-21116}"
+	wizard_hbbr_port="${wizard_hbbr_port:-21117}"
+	wizard_key="${wizard_key:-}"
+	wizard_must_login="${wizard_must_login:-N}"
+}
+
+# Persist wizard env vars so main can read them on every start.
+save_wizard_conf() {
+	load_wizard_defaults
+	mkdir -p "${CONF_DIR}" 2>/dev/null || true
+	cat > "${WIZARD_FILE}" <<EOF
+wizard_host=${wizard_host}
+wizard_api_scheme=${wizard_api_scheme}
+wizard_api_port=${wizard_api_port}
+wizard_hbbs_port=${wizard_hbbs_port}
+wizard_hbbr_port=${wizard_hbbr_port}
+wizard_key=${wizard_key}
+wizard_must_login=${wizard_must_login}
+EOF
+}
+
+load_wizard_conf() {
+	load_wizard_defaults
+	if [ -f "${WIZARD_FILE}" ]; then
+		# shellcheck disable=SC1090
+		# Values are KEY=value lines we wrote ourselves.
+		set -a
+		# shellcheck source=/dev/null
+		. "${WIZARD_FILE}"
+		set +a
+	fi
+	load_wizard_defaults
+}
+
+# Set a top-level or one-level nested scalar in YAML: section.key = "value"
+# section empty means top-level key under gin/rustdesk style "key:" at indent 2 inside section.
+yaml_set_section_key() {
+	local cfg=$1
+	local section=$2
+	local key=$3
+	local value=$4
+	awk -v section="${section}" -v key="${key}" -v value="${value}" '
+		BEGIN {
+			in_sec = (section == "")
+			done = 0
+		}
+		section != "" && $0 ~ ("^" section ":") {
+			in_sec = 1
+			print
+			next
+		}
+		section != "" && in_sec && /^[^[:space:]#]/ {
+			in_sec = 0
+		}
+		in_sec && !done && $0 ~ ("^[[:space:]]*" key ":[[:space:]]*") {
+			match($0, /^[[:space:]]*/)
+			print substr($0, 1, RLENGTH) key ": \"" value "\""
+			done = 1
+			next
+		}
+		{ print }
+		END {
+			# If missing, append under section is hard; ignore — templates already have keys.
+		}
+	' "${cfg}" > "${cfg}.tmp" && mv "${cfg}.tmp" "${cfg}"
+}
+
+apply_wizard_to_yaml() {
+	local cfg="${CONF_DIR}/config.yaml"
+	[ -f "${cfg}" ] || return 0
+	load_wizard_conf
+
+	local host="${wizard_host}"
+	[ -z "${host}" ] && host="127.0.0.1"
+
+	local id_server="${host}:${wizard_hbbs_port}"
+	local relay_server="${host}:${wizard_hbbr_port}"
+	local api_server="${wizard_api_scheme}://${host}:${wizard_api_port}"
+	local api_addr="0.0.0.0:${wizard_api_port}"
+
+	yaml_set_section_key "${cfg}" "gin" "api-addr" "${api_addr}"
+	yaml_set_section_key "${cfg}" "admin" "id-server-port" "${wizard_hbbs_port}"
+	yaml_set_section_key "${cfg}" "admin" "relay-server-port" "${wizard_hbbr_port}"
+	yaml_set_section_key "${cfg}" "rustdesk" "id-server" "${id_server}"
+	yaml_set_section_key "${cfg}" "rustdesk" "relay-server" "${relay_server}"
+	yaml_set_section_key "${cfg}" "rustdesk" "api-server" "${api_server}"
+
+	# Optional explicit key from wizard; otherwise leave existing / auto pubkey.
+	if [ -n "${wizard_key}" ]; then
+		yaml_set_section_key "${cfg}" "rustdesk" "key" "${wizard_key}"
+	fi
+}
+
+seed_package_config() {
+	mkdir -p "${DATA_DIR}/data" "${DATA_DIR}/logs" "${DATA_DIR}/runtime" "${CONF_DIR}/admin" 2>/dev/null || true
+	if [ -f "${APP_DIR}/conf/config.yaml" ] && [ ! -f "${CONF_DIR}/config.yaml" ]; then
+		cp -f "${APP_DIR}/conf/config.yaml" "${CONF_DIR}/config.yaml"
+	fi
+	if [ -f "${APP_DIR}/conf/admin/hello.html" ] && [ ! -f "${CONF_DIR}/admin/hello.html" ]; then
+		cp -f "${APP_DIR}/conf/admin/hello.html" "${CONF_DIR}/admin/hello.html"
+	fi
+}

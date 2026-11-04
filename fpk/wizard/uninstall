@@ -1,0 +1,17 @@
+[
+  {
+    "stepTitle": "卸载选项",
+    "items": [
+      {
+        "type": "tips",
+        "helpText": "默认保留配置、密钥与数据库。勾选下方选项将删除数据目录中的内容。"
+      },
+      {
+        "type": "switch",
+        "field": "wizard_delete_data",
+        "label": "同时删除配置与数据",
+        "initValue": "false"
+      }
+    ]
+  }
+]

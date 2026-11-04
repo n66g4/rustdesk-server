@@ -2,14 +2,14 @@
 # Start / stop / status for RustDesk Server (hbbs + hbbr + rustdesk-api).
 set -uo pipefail
 
-APP_DIR="${TRIM_APPDEST:-}"
-DATA_DIR="${TRIM_PKGVAR:-}"
-CONF_DIR="${TRIM_PKGETC:-${APP_DIR}/conf}"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=/dev/null
+. "${SCRIPT_DIR}/_common"
+
 LOG_FILE="${DATA_DIR}/rustdesk-server.log"
 PID_FILE="${DATA_DIR}/rustdesk-server.pid"
 RUNTIME_DIR="${DATA_DIR}/runtime"
 DATA_KEYS="${DATA_DIR}/data"
-MUST_LOGIN="${MUST_LOGIN:-N}"
 # Ephemeral port for first-time key generation (must not collide with service ports).
 HBBS_INIT_PORT=39116
 
@@ -188,26 +188,36 @@ start_all() {
 	stop_all
 
 	ensure_dirs
+	load_wizard_conf
+	apply_wizard_to_yaml
 	ensure_jwt_key
 	ensure_server_key
+	# Re-apply after keygen so empty rustdesk.key can pick up pubkey.
+	apply_wizard_to_yaml
+
+	local MUST_LOGIN="${wizard_must_login:-N}"
+	local hbbs_port="${wizard_hbbs_port:-21116}"
+	local hbbr_port="${wizard_hbbr_port:-21117}"
+	local relay_host="${wizard_host:-}"
+	[ -z "${relay_host}" ] || [ "${relay_host}" = "127.0.0.1" ] && relay_host=""
+	local relay_arg=()
+	[ -n "${relay_host}" ] && relay_arg=(-r "${relay_host}:${hbbr_port}")
 
 	if [ -z "${RUSTDESK_API_JWT_KEY:-}" ]; then
 		log_msg "WARN: RUSTDESK_API_JWT_KEY empty; MUST_LOGIN=Y will reject connections"
 	fi
 
-	local hbbs_port=21116
-	local hbbr_port=21117
 	# "_" lets hbbs/hbbr use the local id_ed25519 keypair in cwd.
 	local key_arg="_"
 
-	log_msg "Starting hbbs/hbbr/api (MUST_LOGIN=${MUST_LOGIN})..."
+	log_msg "Starting hbbs/hbbr/api (MUST_LOGIN=${MUST_LOGIN} ports=${hbbs_port}/${hbbr_port})..."
 	export RUSTDESK_API_JWT_KEY
 	export MUST_LOGIN
 	local pids=""
 	local pid
 	(
 		cd "${DATA_KEYS}"
-		nohup "${APP_DIR}/bin/hbbs" -r "127.0.0.1:${hbbr_port}" -p "${hbbs_port}" -k "${key_arg}" --must-login="${MUST_LOGIN}" \
+		nohup "${APP_DIR}/bin/hbbs" "${relay_arg[@]}" -p "${hbbs_port}" -k "${key_arg}" --must-login="${MUST_LOGIN}" \
 			>> "${LOG_FILE}" 2>&1 &
 		echo $!
 	) > "${PID_FILE}.hbbs"
