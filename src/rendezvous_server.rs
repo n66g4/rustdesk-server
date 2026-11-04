@@ -713,6 +713,16 @@ impl RendezvousServer {
         }
         // Require rustdesk-api JWT when MUST_LOGIN is enabled.
         if MUST_LOGIN.load(Ordering::SeqCst) {
+            if jwt::SECRET.is_empty() {
+                let mut msg_out = RendezvousMessage::new();
+                msg_out.set_punch_hole_response(PunchHoleResponse {
+                    other_failure: String::from(
+                        "Server login required but JWT key is not configured!",
+                    ),
+                    ..Default::default()
+                });
+                return Ok((msg_out, None));
+            }
             if ph.token.is_empty() {
                 let mut msg_out = RendezvousMessage::new();
                 msg_out.set_punch_hole_response(PunchHoleResponse {
@@ -720,17 +730,16 @@ impl RendezvousServer {
                     ..Default::default()
                 });
                 return Ok((msg_out, None));
-            } else if !jwt::SECRET.is_empty() {
-                if jwt::verify_token(ph.token.as_str()).is_err() {
-                    let mut msg_out = RendezvousMessage::new();
-                    msg_out.set_punch_hole_response(PunchHoleResponse {
-                        other_failure: String::from(
-                            "Token error, please log out and log back in!",
-                        ),
-                        ..Default::default()
-                    });
-                    return Ok((msg_out, None));
-                }
+            }
+            if jwt::verify_token(ph.token.as_str()).is_err() {
+                let mut msg_out = RendezvousMessage::new();
+                msg_out.set_punch_hole_response(PunchHoleResponse {
+                    other_failure: String::from(
+                        "Token error, please log out and log back in!",
+                    ),
+                    ..Default::default()
+                });
+                return Ok((msg_out, None));
             }
         }
         let id = ph.id;

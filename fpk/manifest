@@ -1,5 +1,5 @@
 appname               = rustdesk-server
-version               = 1.1.16-1
+version               = 1.1.16-2
 display_name          = RustDesk Server
 desc                  = 自建 RustDesk 服务器（hbbs/hbbr）+ API 管理后台。支持官方客户端；可选 MUST_LOGIN + JWT 强制登录。
 platform              = x86
@@ -14,4 +14,4 @@ desktop_applaunchname = rustdesk-server.Application
 service_port          = 21114
 checkport             = true
 ctl_stop              = true
-changelog             = 基于官方 rustdesk-server 1.1.16，移植 JWT/MUST_LOGIN，集成 lejianwen rustdesk-api，fnOS 原生二进制 FPK。
+changelog             = 修复：jwt.key 误写 rustdesk.key；MUST_LOGIN 空密钥绕过；半死进程重启端口冲突；密钥生成占用 21116；去掉 data/logs 自引用软链。

@@ -10,6 +10,8 @@ PID_FILE="${DATA_DIR}/rustdesk-server.pid"
 RUNTIME_DIR="${DATA_DIR}/runtime"
 DATA_KEYS="${DATA_DIR}/data"
 MUST_LOGIN="${MUST_LOGIN:-N}"
+# Ephemeral port for first-time key generation (must not collide with service ports).
+HBBS_INIT_PORT=39116
 
 log_msg() {
 	echo "$(date '+%Y-%m-%d %H:%M:%S') - $*" >> "${LOG_FILE}" 2>/dev/null || true
@@ -17,40 +19,72 @@ log_msg() {
 
 ensure_dirs() {
 	mkdir -p "${DATA_DIR}" "${RUNTIME_DIR}" "${DATA_KEYS}" "${DATA_DIR}/logs" 2>/dev/null || true
-	# Persist config under etc/data; seed from package on first run.
+	# Persist config under etc; seed from package on first run.
 	if [ ! -f "${CONF_DIR}/config.yaml" ] && [ -f "${APP_DIR}/conf/config.yaml" ]; then
 		mkdir -p "${CONF_DIR}" "${CONF_DIR}/admin" 2>/dev/null || true
 		cp -f "${APP_DIR}/conf/config.yaml" "${CONF_DIR}/config.yaml"
 		[ -f "${APP_DIR}/conf/admin/hello.html" ] && cp -f "${APP_DIR}/conf/admin/hello.html" "${CONF_DIR}/admin/hello.html"
 	fi
-	# Workdir links expected by apimain (relative paths in config.yaml).
-	ln -sfn "${CONF_DIR}" "${DATA_DIR}/conf" 2>/dev/null || true
+	# apimain expects conf/ and resources/ relative to cwd (= DATA_DIR).
+	if [ -n "${CONF_DIR}" ] && [ "${CONF_DIR}" != "${DATA_DIR}/conf" ]; then
+		ln -sfn "${CONF_DIR}" "${DATA_DIR}/conf" 2>/dev/null || true
+	fi
 	ln -sfn "${APP_DIR}/resources" "${DATA_DIR}/resources" 2>/dev/null || true
-	ln -sfn "${DATA_KEYS}" "${DATA_DIR}/data" 2>/dev/null || true
-	ln -sfn "${DATA_DIR}/logs" "${DATA_DIR}/logs" 2>/dev/null || true
+}
+
+# Read jwt.key only from the jwt: block.
+read_jwt_key() {
+	local cfg=$1
+	awk '
+		/^jwt:/{f=1; next}
+		f && /^[^[:space:]#]/{f=0}
+		f && /^[[:space:]]*key:[[:space:]]*/ {
+			line=$0
+			sub(/^[[:space:]]*key:[[:space:]]*/, "", line)
+			gsub(/"/, "", line)
+			gsub(/^[[:space:]]+|[[:space:]]+$/, "", line)
+			print line
+			exit
+		}
+	' "${cfg}"
+}
+
+# Write jwt.key only inside the jwt: block (never touch rustdesk.key).
+write_jwt_key() {
+	local cfg=$1
+	local key=$2
+	awk -v key="${key}" '
+		BEGIN { in_jwt=0; done=0 }
+		/^jwt:/ { in_jwt=1; print; next }
+		in_jwt && /^[^[:space:]#]/ { in_jwt=0 }
+		in_jwt && !done && /^[[:space:]]*key:[[:space:]]*/ {
+			match($0, /^[[:space:]]*/)
+			print substr($0, 1, RLENGTH) "key: \"" key "\""
+			done=1
+			next
+		}
+		{ print }
+	' "${cfg}" > "${cfg}.tmp" && mv "${cfg}.tmp" "${cfg}"
 }
 
 ensure_jwt_key() {
 	local cfg="${CONF_DIR}/config.yaml"
 	[ -f "${cfg}" ] || return 0
 	local key
-	key=$(awk '/^jwt:/{f=1;next} f&&/^[^[:space:]]/{f=0} f&&/key:/{gsub(/[" ]/,""); sub(/^key:/,""); print; exit}' "${cfg}")
+	key=$(read_jwt_key "${cfg}")
 	if [ -z "${key}" ]; then
 		key=$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')
-		# shellcheck disable=SC2016
-		sed -i.bak -E "s|^([[:space:]]*key:[[:space:]]*).*$|\1\"${key}\"|" "${cfg}" 2>/dev/null || \
-			sed -i '' -E "s|^([[:space:]]*key:[[:space:]]*).*$|\1\"${key}\"|" "${cfg}"
-		rm -f "${cfg}.bak" 2>/dev/null || true
+		write_jwt_key "${cfg}" "${key}"
 	fi
 	export RUSTDESK_API_JWT_KEY="${key}"
 }
 
 ensure_server_key() {
-	# Generate id_ed25519 by briefly running hbbs if missing.
+	# Generate id_ed25519 by briefly running hbbs on a non-service port.
 	if [ ! -s "${DATA_KEYS}/id_ed25519.pub" ]; then
-		log_msg "Generating server keypair..."
+		log_msg "Generating server keypair on port ${HBBS_INIT_PORT}..."
 		(
-			cd "${DATA_KEYS}" && "${APP_DIR}/bin/hbbs" -p 21116 -k _ >> "${LOG_FILE}" 2>&1 &
+			cd "${DATA_KEYS}" && "${APP_DIR}/bin/hbbs" -p "${HBBS_INIT_PORT}" -k _ >> "${LOG_FILE}" 2>&1 &
 			echo $! > "${DATA_DIR}/hbbs-init.pid"
 		)
 		local i=0
@@ -60,31 +94,38 @@ ensure_server_key() {
 			i=$((i + 1))
 		done
 		if [ -f "${DATA_DIR}/hbbs-init.pid" ]; then
-			kill -TERM "$(cat "${DATA_DIR}/hbbs-init.pid")" 2>/dev/null || true
+			local init_pid
+			init_pid=$(tr -d '[:space:]' < "${DATA_DIR}/hbbs-init.pid")
+			if [ -n "${init_pid}" ]; then
+				kill -TERM "${init_pid}" 2>/dev/null || true
+				local j=0
+				while kill -0 "${init_pid}" 2>/dev/null && [ "${j}" -lt 10 ]; do
+					sleep 1
+					j=$((j + 1))
+				done
+				kill -KILL "${init_pid}" 2>/dev/null || true
+			fi
 			rm -f "${DATA_DIR}/hbbs-init.pid"
 		fi
-		# Official hbbs writes key next to cwd; also check APP_DIR leftovers.
-		[ -f "${DATA_KEYS}/id_ed25519" ] || { [ -f ./id_ed25519 ] && mv ./id_ed25519 "${DATA_KEYS}/"; }
-		[ -f "${DATA_KEYS}/id_ed25519.pub" ] || { [ -f ./id_ed25519.pub ] && mv ./id_ed25519.pub "${DATA_KEYS}/"; }
+		# Kill any leftover init-port listeners just in case.
+		pgrep -f "${APP_DIR}/bin/hbbs.*-p ${HBBS_INIT_PORT}" >/dev/null 2>&1 && \
+			pkill -f "${APP_DIR}/bin/hbbs.*-p ${HBBS_INIT_PORT}" 2>/dev/null || true
 	fi
-	# Sync public key into config if empty.
+	# Sync public key into rustdesk.key if empty.
 	local pub cfg
 	pub=$(cat "${DATA_KEYS}/id_ed25519.pub" 2>/dev/null || true)
 	cfg="${CONF_DIR}/config.yaml"
 	if [ -n "${pub}" ] && [ -f "${cfg}" ]; then
-		if grep -qE '^[[:space:]]*key:[[:space:]]*""[[:space:]]*$' "${cfg}"; then
-			# Only fill rustdesk.key under rustdesk: block — simple replace of first empty key after rustdesk:
-			awk -v pub="${pub}" '
-				BEGIN{inrd=0}
-				/^rustdesk:/{inrd=1}
-				inrd && /^[[:space:]]*key:[[:space:]]*""[[:space:]]*$/ && !done {
-					sub(/""/, "\"" pub "\"")
-					done=1
-				}
-				/^[^[:space:]]/ && !/^rustdesk:/{inrd=0}
-				{print}
-			' "${cfg}" > "${cfg}.tmp" && mv "${cfg}.tmp" "${cfg}"
-		fi
+		awk -v pub="${pub}" '
+			BEGIN{inrd=0; done=0}
+			/^rustdesk:/{inrd=1}
+			inrd && /^[[:space:]]*key:[[:space:]]*""[[:space:]]*$/ && !done {
+				sub(/""/, "\"" pub "\"")
+				done=1
+			}
+			/^[^[:space:]#]/ && !/^rustdesk:/{inrd=0}
+			{print}
+		' "${cfg}" > "${cfg}.tmp" && mv "${cfg}.tmp" "${cfg}"
 	fi
 }
 
@@ -98,15 +139,17 @@ status() {
 		return 1
 	fi
 	local ok=0
+	local any=0
 	for pid in $(tr ' ' '\n' < "${PID_FILE}"); do
 		[ -z "${pid}" ] && continue
+		any=1
 		if alive "${pid}"; then
 			ok=1
 		else
 			return 1
 		fi
 	done
-	[ "${ok}" -eq 1 ]
+	[ "${any}" -eq 1 ] && [ "${ok}" -eq 1 ]
 }
 
 stop_one() {
@@ -134,16 +177,23 @@ stop_all() {
 	stop_one "${APP_DIR}/bin/hbbs"
 	stop_one "${APP_DIR}/bin/hbbr"
 	stop_one "${APP_DIR}/bin/rustdesk-api"
-	rm -f "${PID_FILE}"
+	rm -f "${PID_FILE}" "${PID_FILE}.tmp"
 }
 
 start_all() {
+	# Always clear partial/stale instances before (re)start to avoid port conflicts.
 	if status; then
 		return 0
 	fi
+	stop_all
+
 	ensure_dirs
 	ensure_jwt_key
 	ensure_server_key
+
+	if [ -z "${RUSTDESK_API_JWT_KEY:-}" ]; then
+		log_msg "WARN: RUSTDESK_API_JWT_KEY empty; MUST_LOGIN=Y will reject connections"
+	fi
 
 	local hbbs_port=21116
 	local hbbr_port=21117
@@ -151,26 +201,35 @@ start_all() {
 	local key_arg="_"
 
 	log_msg "Starting hbbs/hbbr/api (MUST_LOGIN=${MUST_LOGIN})..."
+	export RUSTDESK_API_JWT_KEY
+	export MUST_LOGIN
+	local pids=""
+	local pid
 	(
 		cd "${DATA_KEYS}"
-		export RUSTDESK_API_JWT_KEY
-		export MUST_LOGIN
 		nohup "${APP_DIR}/bin/hbbs" -r "127.0.0.1:${hbbr_port}" -p "${hbbs_port}" -k "${key_arg}" --must-login="${MUST_LOGIN}" \
 			>> "${LOG_FILE}" 2>&1 &
-		echo $! >> "${PID_FILE}.tmp"
+		echo $!
+	) > "${PID_FILE}.hbbs"
+	pid=$(tr -d '[:space:]' < "${PID_FILE}.hbbs")
+	pids="${pid}"
+	(
+		cd "${DATA_KEYS}"
 		nohup "${APP_DIR}/bin/hbbr" -p "${hbbr_port}" -k "${key_arg}" \
 			>> "${LOG_FILE}" 2>&1 &
-		echo $! >> "${PID_FILE}.tmp"
-	)
+		echo $!
+	) > "${PID_FILE}.hbbr"
+	pid=$(tr -d '[:space:]' < "${PID_FILE}.hbbr")
+	pids="${pids} ${pid}"
 	(
 		cd "${DATA_DIR}"
-		export RUSTDESK_API_JWT_KEY
-		# apimain expects conf/config.yaml relative to cwd
 		nohup "${APP_DIR}/bin/rustdesk-api" >> "${LOG_FILE}" 2>&1 &
-		echo $! >> "${PID_FILE}.tmp"
-	)
-	tr '\n' ' ' < "${PID_FILE}.tmp" > "${PID_FILE}"
-	rm -f "${PID_FILE}.tmp"
+		echo $!
+	) > "${PID_FILE}.api"
+	pid=$(tr -d '[:space:]' < "${PID_FILE}.api")
+	pids="${pids} ${pid}"
+	echo "${pids}" > "${PID_FILE}"
+	rm -f "${PID_FILE}.hbbs" "${PID_FILE}.hbbr" "${PID_FILE}.api"
 	sleep 2
 	if status; then
 		log_msg "Started OK"
