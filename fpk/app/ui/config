@@ -1,0 +1,14 @@
+{
+  ".url": {
+    "rustdesk-server.Application": {
+      "title": "RustDesk Server",
+      "desc": "RustDesk API 管理后台",
+      "icon": "images/icon_{0}.png",
+      "type": "url",
+      "protocol": "http",
+      "port": "21114",
+      "url": "/",
+      "allUsers": true
+    }
+  }
+}

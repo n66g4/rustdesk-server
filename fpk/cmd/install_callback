@@ -1,0 +1,14 @@
+#!/bin/bash
+# Seed persistent config and data dirs after install.
+set -uo pipefail
+APP_DIR="${TRIM_APPDEST:-}"
+DATA_DIR="${TRIM_PKGVAR:-}"
+CONF_DIR="${TRIM_PKGETC:-}"
+mkdir -p "${DATA_DIR}/data" "${DATA_DIR}/logs" "${DATA_DIR}/runtime" "${CONF_DIR}/admin" 2>/dev/null || true
+if [ -f "${APP_DIR}/conf/config.yaml" ] && [ ! -f "${CONF_DIR}/config.yaml" ]; then
+	cp -f "${APP_DIR}/conf/config.yaml" "${CONF_DIR}/config.yaml"
+fi
+if [ -f "${APP_DIR}/conf/admin/hello.html" ] && [ ! -f "${CONF_DIR}/admin/hello.html" ]; then
+	cp -f "${APP_DIR}/conf/admin/hello.html" "${CONF_DIR}/admin/hello.html"
+fi
+exit 0

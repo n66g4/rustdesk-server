@@ -1,0 +1,5 @@
+#!/bin/bash
+# Stop service before uninstall.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+bash "${SCRIPT_DIR}/main" stop || true
+exit 0

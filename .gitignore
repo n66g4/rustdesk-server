@@ -1,0 +1,10 @@
+/target/
+/dist/
+/third_party/
+/fpk/*.fpk
+/fpk/app/bin/hbbs
+/fpk/app/bin/hbbr
+/fpk/app/bin/rustdesk-api
+/fpk/app/resources/
+**/.DS_Store
+*.log
