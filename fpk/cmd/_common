@@ -7,19 +7,27 @@ DATA_DIR="${TRIM_PKGVAR:-}"
 CONF_DIR="${TRIM_PKGETC:-${APP_DIR}/conf}"
 WIZARD_FILE="${CONF_DIR}/wizard.conf"
 
+# API port is locked to hbbs-2 (Synology SPK behavior).
+derive_api_port() {
+	wizard_hbbs_port="${wizard_hbbs_port:-21116}"
+	wizard_api_port=$((wizard_hbbs_port - 2))
+}
+
 load_wizard_defaults() {
 	wizard_host="${wizard_host:-}"
 	wizard_api_scheme="${wizard_api_scheme:-http}"
-	wizard_api_port="${wizard_api_port:-21114}"
 	wizard_hbbs_port="${wizard_hbbs_port:-21116}"
 	wizard_hbbr_port="${wizard_hbbr_port:-21117}"
+	derive_api_port
 	wizard_key="${wizard_key:-}"
+	wizard_use_custom_key="${wizard_use_custom_key:-N}"
 	wizard_must_login="${wizard_must_login:-N}"
 }
 
 # Persist wizard env vars so main can read them on every start.
 save_wizard_conf() {
 	load_wizard_defaults
+	derive_api_port
 	mkdir -p "${CONF_DIR}" 2>/dev/null || true
 	cat > "${WIZARD_FILE}" <<EOF
 wizard_host=${wizard_host}
@@ -28,6 +36,7 @@ wizard_api_port=${wizard_api_port}
 wizard_hbbs_port=${wizard_hbbs_port}
 wizard_hbbr_port=${wizard_hbbr_port}
 wizard_key=${wizard_key}
+wizard_use_custom_key=${wizard_use_custom_key}
 wizard_must_login=${wizard_must_login}
 EOF
 }
@@ -82,6 +91,7 @@ apply_wizard_to_yaml() {
 	local cfg="${CONF_DIR}/config.yaml"
 	[ -f "${cfg}" ] || return 0
 	load_wizard_conf
+	derive_api_port
 
 	local host="${wizard_host}"
 	[ -z "${host}" ] && host="127.0.0.1"

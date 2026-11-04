@@ -47,6 +47,29 @@
       background: #fff;
     }
     .field input[readonly] { background: #f0f0f0; color: #6c757d; }
+    .check-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 10px;
+      color: #696969;
+      font-size: 13px;
+    }
+    .check-row input { width: auto; height: auto; }
+    .key-wrap { position: relative; }
+    .key-wrap input { padding-right: 40px; }
+    .key-wrap .eye {
+      position: absolute;
+      right: 8px;
+      top: 50%;
+      transform: translateY(-50%);
+      border: none;
+      background: none;
+      cursor: pointer;
+      font-size: 14px;
+      color: #666;
+      padding: 4px;
+    }
     .hint { font-size: 11px; color: #888; margin-top: 2px; }
     .actions { text-align: center; margin-top: 18px; }
     .btn {
@@ -83,8 +106,8 @@
     <div class="row">
       <div class="field">
         <label for="host">域名或 IP</label>
-        <input id="host" type="text" placeholder="留空则用 127.0.0.1（仅本机）">
-        <div class="hint">给 RustDesk 客户端用，不要带端口。管理后台不走此域名。</div>
+        <input id="host" type="text" placeholder="默认端口时可留空，否则请填写有效域名或 IP">
+        <div class="hint">不要带端口。非默认 hbbs/hbbr 端口时必填。管理后台不走此域名。</div>
       </div>
       <div class="field">
         <label for="api_scheme">API 协议（客户端）</label>
@@ -96,7 +119,8 @@
       </div>
       <div class="field">
         <label for="api_port">API / 管理后台端口</label>
-        <input id="api_port" type="number" min="1" max="65535">
+        <input id="api_port" type="number" readonly>
+        <div class="hint">自动 = hbbs − 2（与群晖一致）</div>
       </div>
     </div>
   </div>
@@ -140,10 +164,17 @@
   </div>
 
   <div class="box" data-title="KEY">
+    <label class="check-row" for="use_custom_key">
+      <input id="use_custom_key" type="checkbox">
+      <span>使用自定义 KEY</span>
+    </label>
     <div class="field">
-      <label for="key">公钥 Key</label>
-      <input id="key" type="text" placeholder="留空则使用已生成公钥">
-      <div class="hint">客户端加密连接用。当前值来自配置或自动生成的公钥。</div>
+      <label for="key">Key（客户端加密）</label>
+      <div class="key-wrap">
+        <input id="key" type="password" placeholder="自动生成的公钥" readonly>
+        <button type="button" class="eye" id="btnKeyEye" title="显示/隐藏">显示</button>
+      </div>
+      <div class="hint" id="key_hint">未勾选时使用本机自动生成的公钥（只读）。勾选后可粘贴自定义 KEY。</div>
     </div>
   </div>
 
@@ -155,6 +186,8 @@
 
   <script>
     const API = "/cgi/ThirdParty/rustdesk-server/api.cgi";
+    let publicKey = "";
+    let customKey = "";
 
     function $(id) { return document.getElementById(id); }
 
@@ -164,15 +197,41 @@
       if (!isNaN(hbbs)) {
         $("hbbs_nat_port").value = hbbs - 1;
         $("hbbs_web_port").value = hbbs + 2;
+        $("api_port").value = hbbs - 2;
       }
       if (!isNaN(hbbr)) {
         $("hbbr_web_port").value = hbbr + 2;
       }
     }
 
+    // Domain / IPv4 / IPv6 (aligned with Synology SPK). Empty OK only with default ports.
+    function isValidHost(host) {
+      if (!host) return true;
+      if (/^[^[\]]+:\d+$/.test(host)) return false; // host:port
+      const domain = /^([a-zA-Z0-9\-_]+\.)+[a-zA-Z]{2,}$/;
+      const ipv4 = /^((25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(25[0-5]|2[0-4]\d|[01]?\d\d?)$/;
+      const ipv6 = /^([a-fA-F0-9:]+:+)+[a-fA-F0-9]+$/;
+      return domain.test(host) || ipv4.test(host) || ipv6.test(host);
+    }
+
+    function syncKeyField() {
+      const custom = $("use_custom_key").checked;
+      const input = $("key");
+      if (custom) {
+        input.readOnly = false;
+        input.placeholder = "粘贴自定义 KEY";
+        input.value = customKey || "";
+        $("key_hint").textContent = "勾选后可填写自定义 KEY，将写入客户端配置。";
+      } else {
+        if (!input.readOnly) customKey = input.value.trim();
+        input.readOnly = true;
+        input.placeholder = "自动生成的公钥";
+        input.value = publicKey || "";
+        $("key_hint").textContent = "未勾选时使用本机自动生成的公钥（只读）。勾选后可粘贴自定义 KEY。";
+      }
+    }
+
     function adminUrl() {
-      // Always open via the NAS address the browser already uses.
-      // api_scheme/host in the form are for RustDesk clients, not this button.
       const host = window.location.hostname;
       const port = $("api_port").value || "21114";
       return "http://" + host + ":" + port + "/_admin/";
@@ -185,9 +244,20 @@
     }
 
     function validate() {
+      syncDerived();
       const host = $("host").value.trim();
-      if (host.indexOf(":") >= 0) {
-        setMsg("域名/IP 不要带端口", true);
+      if (/^[^[\]]+:\d+$/.test(host)) {
+        setMsg("域名或 IP 不能包含端口号", true);
+        return false;
+      }
+      if (host && !isValidHost(host)) {
+        setMsg("请输入有效的域名或 IP 地址", true);
+        return false;
+      }
+      const hbbs = String($("hbbs_port").value);
+      const hbbr = String($("hbbr_port").value);
+      if ((hbbs !== "21116" || hbbr !== "21117") && !host) {
+        setMsg("使用非默认端口时必须填写域名或 IP", true);
         return false;
       }
       const ports = [
@@ -200,12 +270,16 @@
       ].map(Number);
       for (const p of ports) {
         if (!p || p < 1 || p > 65535) {
-          setMsg("端口无效", true);
+          setMsg("端口无效（API 端口 = hbbs − 2，请检查 hbbs）", true);
           return false;
         }
       }
       if (new Set(ports).size !== ports.length) {
         setMsg("端口不能重复", true);
+        return false;
+      }
+      if ($("use_custom_key").checked && !$("key").value.trim()) {
+        setMsg("已勾选自定义 KEY，请填写 Key", true);
         return false;
       }
       return true;
@@ -219,12 +293,14 @@
         if (!data.success) throw new Error(data.message || "加载失败");
         $("host").value = data.host || "";
         $("api_scheme").value = data.api_scheme || "http";
-        $("api_port").value = data.api_port || "21114";
         $("hbbs_port").value = data.hbbs_port || "21116";
         $("hbbr_port").value = data.hbbr_port || "21117";
-        $("key").value = data.key || "";
         $("must_login").value = data.must_login || "N";
-        syncDerived();
+        publicKey = data.public_key || "";
+        customKey = data.use_custom_key === "Y" ? (data.key || "") : "";
+        $("use_custom_key").checked = data.use_custom_key === "Y";
+        syncKeyField();
+        syncDerived(); // sets api_port = hbbs - 2
         setMsg("");
       } catch (e) {
         setMsg(String(e.message || e), true);
@@ -236,6 +312,8 @@
       $("btnSave").disabled = true;
       setMsg("保存并重启服务…");
       try {
+        const custom = $("use_custom_key").checked;
+        if (custom) customKey = $("key").value.trim();
         const body = new URLSearchParams({
           action: "save",
           host: $("host").value.trim(),
@@ -243,7 +321,8 @@
           api_port: $("api_port").value,
           hbbs_port: $("hbbs_port").value,
           hbbr_port: $("hbbr_port").value,
-          key: $("key").value.trim(),
+          use_custom_key: custom ? "Y" : "N",
+          key: custom ? customKey : "",
           must_login: $("must_login").value
         });
         const res = await fetch(API, {
@@ -254,7 +333,15 @@
         });
         const data = await res.json();
         if (!data.success) throw new Error(data.message || "保存失败");
-        if (data.key) $("key").value = data.key;
+        if (data.public_key) publicKey = data.public_key;
+        if (data.use_custom_key === "Y") {
+          customKey = data.key || customKey;
+          $("use_custom_key").checked = true;
+        } else {
+          customKey = "";
+          $("use_custom_key").checked = false;
+        }
+        syncKeyField();
         setMsg(data.message || "已保存");
       } catch (e) {
         setMsg(String(e.message || e), true);
@@ -265,6 +352,13 @@
 
     $("hbbs_port").addEventListener("input", syncDerived);
     $("hbbr_port").addEventListener("input", syncDerived);
+    $("use_custom_key").addEventListener("change", syncKeyField);
+    $("btnKeyEye").addEventListener("click", function () {
+      const input = $("key");
+      const show = input.type === "password";
+      input.type = show ? "text" : "password";
+      $("btnKeyEye").textContent = show ? "隐藏" : "显示";
+    });
     $("btnSave").addEventListener("click", saveConfig);
     $("btnAdmin").addEventListener("click", function () {
       window.open(adminUrl(), "_blank");

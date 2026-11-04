@@ -2,7 +2,7 @@
 
 基于官方 [rustdesk/rustdesk-server](https://github.com/rustdesk/rustdesk-server) **1.1.16**，移植与 lejianwen API 对接的 **JWT / MUST_LOGIN**，并打包为飞牛 fnOS **原生二进制 `.fpk`**（x86_64）。
 
-当前发行包版本：**1.1.16-9**
+当前发行包版本：**1.1.16-11**
 
 - 仓库：https://github.com/n66g4/rustdesk-server
 - Release：https://github.com/n66g4/rustdesk-server/releases
@@ -33,11 +33,12 @@
 
 | 项 | 说明 |
 | --- | --- |
-| 域名 / IP | 客户端访问用主机名，不要带端口；留空为 `127.0.0.1` |
-| API 协议 / 端口 | `http` 或 `https`，默认端口 `21114` |
+| 域名 / IP | 有效域名或 IP，不要带端口；默认端口时可留空，非默认端口必填 |
+| API 协议 | `http` / `https`（客户端）；本机 API 仍为 http |
+| API 端口 | 自动 = hbbs − 2（只读，与群晖一致） |
 | ID 端口 (hbbs) | 默认 `21116`（另需开放端口-1 NAT、端口+2 WebSocket） |
 | 中继端口 (hbbr) | 默认 `21117`（另需开放端口+2 WebSocket） |
-| Key（公钥） | 留空则使用已生成公钥；也可粘贴已有公钥 |
+| Key | 默认只读显示自动公钥；勾选「使用自定义 KEY」后可粘贴 |
 | MUST_LOGIN | 强制客户端先登录 API |
 
 保存后写入 `etc/wizard.conf` 并同步 `config.yaml`。重载对齐群晖：包内监督进程托管 hbbs/hbbr/api；面板 `kill` API（或仅写配置）触发整组重拉。

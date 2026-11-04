@@ -88,11 +88,17 @@ parse_kv() {
 		key=$(urldecode "${key}")
 		val=$(urldecode "${val}")
 		case "${key}" in
-			action|host|api_scheme|api_port|hbbs_port|hbbr_port|key|must_login)
+			action|host|api_scheme|api_port|hbbs_port|hbbr_port|key|must_login|use_custom_key)
 				printf '%s\t%s\n' "${key}" "${val}"
 				;;
 		esac
 	done
+}
+
+read_public_key() {
+	if [ -s "${PUB_FILE}" ]; then
+		tr -d '\r\n' < "${PUB_FILE}"
+	fi
 }
 
 get_kv() {
@@ -185,16 +191,27 @@ hydrate_config() {
 	fi
 
 	wizard_api_scheme="${wizard_api_scheme:-http}"
-	wizard_api_port="${wizard_api_port:-21114}"
 	wizard_hbbs_port="${wizard_hbbs_port:-21116}"
 	wizard_hbbr_port="${wizard_hbbr_port:-21117}"
+	wizard_api_port=$((wizard_hbbs_port - 2))
 	wizard_must_login="${wizard_must_login:-N}"
+	wizard_use_custom_key="${wizard_use_custom_key:-}"
 
-	if [ -z "${wizard_key}" ]; then
-		wizard_key=$(yaml_get rustdesk key)
+	public_key=$(read_public_key)
+	local cfg_key
+	cfg_key=$(yaml_get rustdesk key)
+
+	# Prefer explicit wizard custom key; else infer from yaml vs pubkey.
+	if [ -z "${wizard_key}" ] && [ -n "${cfg_key}" ] && [ "${cfg_key}" != "${public_key}" ]; then
+		wizard_key="${cfg_key}"
 	fi
-	if [ -z "${wizard_key}" ] && [ -s "${PUB_FILE}" ]; then
-		wizard_key=$(tr -d '\r\n' < "${PUB_FILE}")
+	if [ -z "${wizard_use_custom_key}" ]; then
+		if [ -n "${wizard_key}" ] && [ "${wizard_key}" != "${public_key}" ]; then
+			wizard_use_custom_key="Y"
+		else
+			wizard_use_custom_key="N"
+			wizard_key=""
+		fi
 	fi
 }
 
@@ -204,6 +221,22 @@ valid_port() {
 		''|*[!0-9]*) return 1 ;;
 	esac
 	[ "${p}" -ge 1 ] && [ "${p}" -le 65535 ]
+}
+
+# Synology-style host check: empty OK; else domain / IPv4 / IPv6; reject host:port.
+valid_host() {
+	local host=$1
+	[ -z "${host}" ] && return 0
+	case "${host}" in
+		*:*)
+			# Allow IPv6; reject host:port (single colon + digits).
+			if printf '%s' "${host}" | grep -Eq '^[^:]+:[0-9]+$'; then
+				return 1
+			fi
+			;;
+	esac
+	printf '%s' "${host}" | grep -Eq \
+		'^(([a-zA-Z0-9_-]+\.)+[a-zA-Z]{2,}|((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)|([a-fA-F0-9:]+:+)+[a-fA-F0-9]+)$'
 }
 
 config_fingerprint() {
@@ -297,30 +330,35 @@ restart_services() {
 
 do_get() {
 	hydrate_config
-	log "load host=${wizard_host:-127.0.0.1} api=$(fmt_api "${wizard_api_scheme}" "${wizard_host}" "${wizard_api_port}") hbbs=${wizard_hbbs_port} hbbr=${wizard_hbbr_port} must_login=${wizard_must_login}"
-	json_ok "$(printf '{"success":true,"host":"%s","api_scheme":"%s","api_port":"%s","hbbs_port":"%s","hbbr_port":"%s","key":"%s","must_login":"%s"}' \
+	local show_key="${wizard_key}"
+	[ "${wizard_use_custom_key}" = "Y" ] || show_key="${public_key}"
+	log "load host=${wizard_host:-127.0.0.1} api=$(fmt_api "${wizard_api_scheme}" "${wizard_host}" "${wizard_api_port}") hbbs=${wizard_hbbs_port} hbbr=${wizard_hbbr_port} must_login=${wizard_must_login} custom_key=${wizard_use_custom_key}"
+	json_ok "$(printf '{"success":true,"host":"%s","api_scheme":"%s","api_port":"%s","hbbs_port":"%s","hbbr_port":"%s","key":"%s","public_key":"%s","use_custom_key":"%s","must_login":"%s"}' \
 		"$(json_escape "${wizard_host}")" \
 		"$(json_escape "${wizard_api_scheme}")" \
 		"$(json_escape "${wizard_api_port}")" \
 		"$(json_escape "${wizard_hbbs_port}")" \
 		"$(json_escape "${wizard_hbbr_port}")" \
-		"$(json_escape "${wizard_key}")" \
+		"$(json_escape "${show_key}")" \
+		"$(json_escape "${public_key}")" \
+		"$(json_escape "${wizard_use_custom_key}")" \
 		"$(json_escape "${wizard_must_login}")")"
 }
 
 do_save() {
-	local host api_scheme api_port hbbs_port hbbr_port key must_login
+	local host api_scheme api_port hbbs_port hbbr_port key must_login use_custom_key
 	host=$(get_kv host "")
 	api_scheme=$(get_kv api_scheme "http")
-	api_port=$(get_kv api_port "21114")
 	hbbs_port=$(get_kv hbbs_port "21116")
 	hbbr_port=$(get_kv hbbr_port "21117")
 	key=$(get_kv key "")
 	must_login=$(get_kv must_login "N")
+	use_custom_key=$(get_kv use_custom_key "N")
 
-	case "${host}" in
-		*:*) json_err "域名/IP 不要带端口"; return 0 ;;
-	esac
+	if ! valid_host "${host}"; then
+		json_err "请输入有效的域名或 IP 地址（不要带端口）"
+		return 0
+	fi
 	case "${api_scheme}" in
 		http|https) ;;
 		*) api_scheme=http ;;
@@ -329,8 +367,26 @@ do_save() {
 		Y|N) ;;
 		*) must_login=N ;;
 	esac
-	if ! valid_port "${api_port}" || ! valid_port "${hbbs_port}" || ! valid_port "${hbbr_port}"; then
+	case "${use_custom_key}" in
+		Y|N) ;;
+		*) use_custom_key=N ;;
+	esac
+	if ! valid_port "${hbbs_port}" || ! valid_port "${hbbr_port}"; then
 		json_err "端口无效"
+		return 0
+	fi
+	# API port locked to hbbs-2 (Synology).
+	api_port=$((hbbs_port - 2))
+	if ! valid_port "${api_port}"; then
+		json_err "hbbs 端口过小，无法派生 API 端口 (hbbs−2)"
+		return 0
+	fi
+	if { [ "${hbbs_port}" != "21116" ] || [ "${hbbr_port}" != "21117" ]; } && [ -z "${host}" ]; then
+		json_err "使用非默认端口时必须填写域名或 IP"
+		return 0
+	fi
+	if [ "${use_custom_key}" = "Y" ] && [ -z "${key}" ]; then
+		json_err "已勾选自定义 KEY，请填写 Key"
 		return 0
 	fi
 
@@ -344,15 +400,40 @@ do_save() {
 	wizard_api_port="${api_port}"
 	wizard_hbbs_port="${hbbs_port}"
 	wizard_hbbr_port="${hbbr_port}"
-	wizard_key="${key}"
 	wizard_must_login="${must_login}"
+	wizard_use_custom_key="${use_custom_key}"
+
+	local pub
+	pub=$(read_public_key)
+	if [ "${use_custom_key}" = "Y" ]; then
+		wizard_key="${key}"
+	else
+		wizard_key=""
+		key="${pub}"
+	fi
 
 	if type seed_package_config >/dev/null 2>&1; then
 		seed_package_config
-		save_wizard_conf
+		# Persist use_custom_key alongside other wizard fields.
+		mkdir -p "${CONF_DIR}" 2>/dev/null || true
+		cat > "${WIZARD_FILE}" <<EOF
+wizard_host=${wizard_host}
+wizard_api_scheme=${wizard_api_scheme}
+wizard_api_port=${wizard_api_port}
+wizard_hbbs_port=${wizard_hbbs_port}
+wizard_hbbr_port=${wizard_hbbr_port}
+wizard_key=${wizard_key}
+wizard_use_custom_key=${wizard_use_custom_key}
+wizard_must_login=${wizard_must_login}
+EOF
 		apply_wizard_to_yaml
+		# Always write the effective key into yaml (custom or auto pubkey).
+		if [ -n "${key}" ]; then
+			if type yaml_set_section_key >/dev/null 2>&1; then
+				yaml_set_section_key "${CFG_FILE}" "rustdesk" "key" "${key}"
+			fi
+		fi
 	else
-		# Minimal fallback if _common missing.
 		mkdir -p "${CONF_DIR}" "${DATA_DIR}/data" 2>/dev/null || true
 		cat > "${WIZARD_FILE}" <<EOF
 wizard_host=${wizard_host}
@@ -361,6 +442,7 @@ wizard_api_port=${wizard_api_port}
 wizard_hbbs_port=${wizard_hbbs_port}
 wizard_hbbr_port=${wizard_hbbr_port}
 wizard_key=${wizard_key}
+wizard_use_custom_key=${wizard_use_custom_key}
 wizard_must_login=${wizard_must_login}
 EOF
 		if [ ! -f "${CFG_FILE}" ] && [ -f "${APP_DIR}/conf/config.yaml" ]; then
@@ -373,7 +455,7 @@ EOF
 		return 0
 	fi
 
-	log "save host=${host:-127.0.0.1} api=$(fmt_api "${api_scheme}" "${host}" "${api_port}") hbbs=${hbbs_port} hbbr=${hbbr_port} must_login=${must_login} key=$([ -n "${key}" ] && echo set || echo auto)"
+	log "save host=${host:-127.0.0.1} api=$(fmt_api "${api_scheme}" "${host}" "${api_port}") hbbs=${hbbs_port} hbbr=${hbbr_port} must_login=${must_login} custom_key=${use_custom_key}"
 
 	if ! restart_services; then
 		json_err "配置已写入，但服务未在时限内重载。请在应用中心停止后再启动一次，详见 ${DATA_DIR}/cgi.log"
@@ -381,10 +463,12 @@ EOF
 	fi
 
 	hydrate_config
-	json_ok "$(printf '{"success":true,"message":"配置已更新并重启服务。","key":"%s","api_url":"http://%s:%s/_admin/"}' \
-		"$(json_escape "${wizard_key}")" \
-		"127.0.0.1" \
-		"$(json_escape "${api_port}")")"
+	local out_key="${wizard_key}"
+	[ "${wizard_use_custom_key}" = "Y" ] || out_key="${public_key}"
+	json_ok "$(printf '{"success":true,"message":"配置已更新并重启服务。","key":"%s","public_key":"%s","use_custom_key":"%s"}' \
+		"$(json_escape "${out_key}")" \
+		"$(json_escape "${public_key}")" \
+		"$(json_escape "${wizard_use_custom_key}")")"
 }
 
 KV_FILE=$(mktemp)
