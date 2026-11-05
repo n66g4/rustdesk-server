@@ -208,12 +208,32 @@ start_children() {
 		log_msg "WARN: RUSTDESK_API_JWT_KEY empty; MUST_LOGIN=Y will reject connections"
 	fi
 
+	# Synology behavior: -k _ uses local id_ed25519; custom key must be passed to -k
+	# or clients using config.yaml rustdesk.key will get "key mismatch".
+	local pub=""
+	[ -s "${DATA_KEYS}/id_ed25519.pub" ] && pub=$(tr -d '\r\n' < "${DATA_KEYS}/id_ed25519.pub")
+	local auth_key="${wizard_key:-}"
+	if [ -z "${auth_key}" ]; then
+		auth_key=$(awk '
+			/^rustdesk:/{f=1; next}
+			f && /^[^[:space:]#]/{f=0}
+			f && /^[[:space:]]*key:[[:space:]]*/ {
+				line=$0
+				sub(/^[[:space:]]*key:[[:space:]]*/, "", line)
+				gsub(/"/, "", line)
+				gsub(/^[[:space:]]+|[[:space:]]+$/, "", line)
+				print line
+				exit
+			}
+		' "${CONF_DIR}/config.yaml" 2>/dev/null || true)
+	fi
 	local key_arg="_"
-	local hbbs_cmd
-	if [ -n "${relay_host}" ]; then
-		hbbs_cmd="${HBBS_BIN} -r ${relay_host}:${hbbr_port} -p ${hbbs_port} -k ${key_arg} --must-login=${MUST_LOGIN}"
+	if [ -n "${auth_key}" ] && [ "${auth_key}" != "${pub}" ]; then
+		key_arg="${auth_key}"
+		log_msg "Using custom key for hbbs/hbbr (differs from id_ed25519.pub)"
 	else
-		hbbs_cmd="${HBBS_BIN} -p ${hbbs_port} -k ${key_arg} --must-login=${MUST_LOGIN}"
+		key_arg="_"
+		log_msg "Using local id_ed25519 keypair (-k _)"
 	fi
 
 	log_msg "Starting children (MUST_LOGIN=${MUST_LOGIN} ports=${hbbs_port}/${hbbr_port})..."
@@ -221,8 +241,13 @@ start_children() {
 	export MUST_LOGIN
 	(
 		cd "${DATA_KEYS}"
-		# shellcheck disable=SC2086
-		nohup ${hbbs_cmd} >> "${LOG_FILE}" 2>&1 &
+		if [ -n "${relay_host}" ]; then
+			nohup "${HBBS_BIN}" -r "${relay_host}:${hbbr_port}" -p "${hbbs_port}" \
+				-k "${key_arg}" --must-login="${MUST_LOGIN}" >> "${LOG_FILE}" 2>&1 &
+		else
+			nohup "${HBBS_BIN}" -p "${hbbs_port}" -k "${key_arg}" \
+				--must-login="${MUST_LOGIN}" >> "${LOG_FILE}" 2>&1 &
+		fi
 	)
 	(
 		cd "${DATA_KEYS}"

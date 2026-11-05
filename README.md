@@ -2,7 +2,7 @@
 
 基于官方 [rustdesk/rustdesk-server](https://github.com/rustdesk/rustdesk-server) **1.1.16**，移植与 lejianwen API 对接的 **JWT / MUST_LOGIN**，并打包为飞牛 fnOS **原生二进制 `.fpk`**（x86_64）。
 
-当前发行包版本：**1.1.16-11**
+当前发行包版本：**1.1.16-12**
 
 - 仓库：https://github.com/n66g4/rustdesk-server
 - Release：https://github.com/n66g4/rustdesk-server/releases
